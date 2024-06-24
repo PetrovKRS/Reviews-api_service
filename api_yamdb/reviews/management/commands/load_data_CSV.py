@@ -1,73 +1,63 @@
 import csv
-from collections import OrderedDict
 
-from django.apps import apps
-from django.core.management import BaseCommand
 from django.shortcuts import get_object_or_404
+from django.core.management.base import BaseCommand
 
-from reviews.models import Comment, Category, Genre, Title, TitleGenre, Review
+from reviews.models import (
+    Category, Genre, Title, GenreTitle, Review, Comment
+)
 from users.models import User
 
+# Важен порядок загрузки, чтобы соблюдались связи в таблицах!!!
+CSV_BASE = (
+    ('users.csv', User),
+    ('category.csv', Category),
+    ('genre.csv', Genre),
+    ('titles.csv', Title),
+    ('review.csv', Review),
+    ('comments.csv', Comment),
+    ('genre_title.csv', GenreTitle),
+)
 
 MODELS_FIELDS = {
     'category': Category,
     'genre': Genre,
     'title': Title,
-    'author': User,
     'review': Review,
+    'author': User,
 }
-
-DEFAULT_DATASET = OrderedDict({
-    'category.csv': Category,
-    'comments.csv': Comment,
-    'genre.csv': Genre,
-    'genre_title.csv': TitleGenre,
-    'review.csv': Review,
-    'titles.csv': Title,
-    'users.csv': User,
-})
-
-DEFAULT_DATASET_PATH = 'static/data/'
 
 
 class Command(BaseCommand):
-    help = 'Creating model objects according the file path specified'
-
-    @staticmethod
-    def dict_reader_csv(csv_file, model):
-        reader = csv.DictReader(csv_file, delimiter=',')
-        for row in reader:
-            for field, value in row.items():
-                if field in MODELS_FIELDS.keys():
-                    row[field] = get_object_or_404(
-                        MODELS_FIELDS[field], pk=value
-                    )
-            model.objects.create(**row)
+    help = 'Загрузка данных из csv файлов!'
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            '--use_default_dataset',
-            action='store_true',
-            help="use it to default dataset upload"
-        )
-
-        parser.add_argument('--path', type=str, help="file path")
-        parser.add_argument('--model_name', type=str, help="model name")
-        parser.add_argument(
-            '--app_name',
-            type=str,
-            help="django app name that the model is connected to"
-        )
+        parser.add_argument('--path', type=str, help='Путь к файлу')
 
     def handle(self, *args, **options):
-        if options['use_default_dataset']:
-            for filename, model in DEFAULT_DATASET.items():
-                with open(
-                        DEFAULT_DATASET_PATH + filename, 'rt', encoding='utf-8'
-                ) as csv_file:
-                    self.dict_reader_csv(csv_file, model)
-        else:
-            file_path = options['path']
-            model = apps.get_model(options['app_name'], options['model_name'])
+        print(f'Загрузка данных в БД ...')
+        for item in CSV_BASE:
+            file_path = f'static/data/{item[0]}'
+            model = item[1]
             with open(file_path, 'rt', encoding='utf-8') as csv_file:
-                self.dict_reader_csv(csv_file, model)
+                reader = csv.reader(csv_file, delimiter=',')
+                columns: list = []
+                i: int = 0
+                for row in reader:
+                    if i == 0:
+                        columns.extend(row)
+                    elif i > 0:
+                        row_to_base: dict = {}
+                        for j in range(0, len(row)):
+                            if columns[j] in MODELS_FIELDS.keys():
+                                temp_model = MODELS_FIELDS[columns[j]]
+                                row[j] = get_object_or_404(temp_model, pk=row[j])
+                            row_to_base.update({columns[j]: row[j]})
+                        try:
+                            obj, created = model.objects.get_or_create(**row_to_base)
+                            if not created:
+                                print(f"{obj} уже существует!")
+                        except Exception as err:
+                            print(f"NB Ошибка в строке {row}: {err}")
+                    i += 1
+        print('Загрузка данных в БД завершена!!!')
